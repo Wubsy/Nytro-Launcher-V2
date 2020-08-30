@@ -24,7 +24,8 @@ builder.build({
         copyright: 'Copyright © 2018-2020 Daniel Scalzi',
         publish: {
             owner: "NytroCO",
-            releaseType: "prerelease"
+            releaseType: "prerelease",
+            provider: "github"
         },
         directories: {
             buildResources: 'build',
