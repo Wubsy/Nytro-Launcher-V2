@@ -485,8 +485,8 @@ body, button {
 
 /* Logo on login form. */
 #loginImageSeal {
-    border-radius: 50%;
-    border: 2px solid #cad7e1;
+    /*border-radius: 50%;
+    border: 2px solid #cad7e1;*/
     background: rgba(1, 2, 1, 0.5);
     height: 125px;
     width: 125px;
@@ -541,15 +541,15 @@ body, button {
     10%, 90% {
         transform: translate3d(-1px, 0, 0);
     }
-    
+
     20%, 80% {
         transform: translate3d(2px, 0, 0);
     }
-  
+
     30%, 50%, 70% {
         transform: translate3d(-4px, 0, 0);
     }
-  
+
     40%, 60% {
         transform: translate3d(4px, 0, 0);
     }
@@ -2668,9 +2668,9 @@ input:checked + .toggleSwitchSlider:before {
     height: 70px;
     width: auto;
     position: relative;
-    border: 2px solid white;
+    /*border: 2px solid white;*/
     box-sizing: border-box;
-    border-radius: 50%;
+    /*border-radius: 50%;*/
 }
 
 /* Logo container styles. */
@@ -3236,7 +3236,7 @@ input:checked + .toggleSwitchSlider:before {
     top: 25px;
     display: none;
 }
- 
+
 /* Left side of launch details container, displays percentage and a divider. */
 #launch_details_left {
     display: flex;
