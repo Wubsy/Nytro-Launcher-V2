@@ -22,6 +22,10 @@ builder.build({
         productName: 'Nytro Launcher',
         artifactName: '${productName}-setup-${version}.${ext}',
         copyright: 'Copyright © 2018-2020 Daniel Scalzi',
+        publish: {
+            owner: "NytroCO",
+            releaseType: "prerelease"
+        },
         directories: {
             buildResources: 'build',
             output: 'dist'
