@@ -5,6 +5,7 @@ const child_process = require('child_process')
 const crypto        = require('crypto')
 const EventEmitter  = require('events')
 const fs            = require('fs-extra')
+const StreamZip     = require('node-stream-zip')
 const path          = require('path')
 const Registry      = require('winreg')
 const request       = require('request')
@@ -14,13 +15,6 @@ const zlib          = require('zlib')
 const ConfigManager = require('./configmanager')
 const DistroManager = require('./distromanager')
 const isDev         = require('./isdev')
-
-// Constants
-// const PLATFORM_MAP = {
-//     win32: '-windows-x64.tar.gz',
-//     darwin: '-macosx-x64.tar.gz',
-//     linux: '-linux-x64.tar.gz'
-// }
 
 // Classes
 
@@ -222,42 +216,6 @@ class JavaGuard extends EventEmitter {
         this.mcVersion = mcVersion
     }
 
-    // /**
-    //  * @typedef OracleJREData
-    //  * @property {string} uri The base uri of the JRE.
-    //  * @property {{major: string, update: string, build: string}} version Object containing version information.
-    //  */
-
-    // /**
-    //  * Resolves the latest version of Oracle's JRE and parses its download link.
-    //  * 
-    //  * @returns {Promise.<OracleJREData>} Promise which resolved to an object containing the JRE download data.
-    //  */
-    // static _latestJREOracle(){
-
-    //     const url = 'https://www.oracle.com/technetwork/java/javase/downloads/jre8-downloads-2133155.html'
-    //     const regex = /https:\/\/.+?(?=\/java)\/java\/jdk\/([0-9]+u[0-9]+)-(b[0-9]+)\/([a-f0-9]{32})?\/jre-\1/
-    
-    //     return new Promise((resolve, reject) => {
-    //         request(url, (err, resp, body) => {
-    //             if(!err){
-    //                 const arr = body.match(regex)
-    //                 const verSplit = arr[1].split('u')
-    //                 resolve({
-    //                     uri: arr[0],
-    //                     version: {
-    //                         major: verSplit[0],
-    //                         update: verSplit[1],
-    //                         build: arr[2]
-    //                     }
-    //                 })
-    //             } else {
-    //                 resolve(null)
-    //             }
-    //         })
-    //     })
-    // }
-
     /**
      * @typedef OpenJDKData
      * @property {string} uri The base uri of the JRE.
@@ -266,7 +224,11 @@ class JavaGuard extends EventEmitter {
      */
 
     /**
-     * Fetch the last open JDK binary. Uses https://api.adoptopenjdk.net/
+     * Fetch the last open JDK binary.
+     * 
+     * HOTFIX: Uses Corretto 8 for macOS.
+     * See: https://github.com/dscalzi/HeliosLauncher/issues/70
+     * See: https://github.com/AdoptOpenJDK/openjdk-support/issues/101
      * 
      * @param {string} major The major version of Java to fetch.
      * 
@@ -274,23 +236,85 @@ class JavaGuard extends EventEmitter {
      */
     static _latestOpenJDK(major = '8'){
 
-        const sanitizedOS = process.platform === 'win32' ? 'windows' : (process.platform === 'darwin' ? 'mac' : process.platform)
+        if(process.platform === 'darwin') {
+            return this._latestCorretto(major)
+        } else {
+            return this._latestAdoptium(major)
+        }
+    }
 
-        const url = `https://api.adoptopenjdk.net/v2/latestAssets/nightly/openjdk${major}?os=${sanitizedOS}&arch=x64&heap_size=normal&openjdk_impl=hotspot&type=jre`
-        
+    static _latestAdoptium(major) {
+
+        const majorNum = Number(major)
+        const sanitizedOS = process.platform === 'win32' ? 'windows' : (process.platform === 'darwin' ? 'mac' : process.platform)
+        const url = `https://api.adoptium.net/v3/assets/latest/${major}/hotspot?vendor=eclipse`
+
         return new Promise((resolve, reject) => {
             request({url, json: true}, (err, resp, body) => {
                 if(!err && body.length > 0){
+
+                    const targetBinary = body.find(entry => {
+                        return entry.version.major === majorNum
+                            && entry.binary.os === sanitizedOS
+                            && entry.binary.image_type === 'jdk'
+                            && entry.binary.architecture === 'x64'
+                    })
+
+                    if(targetBinary != null) {
+                        resolve({
+                            uri: targetBinary.binary.package.link,
+                            size: targetBinary.binary.package.size,
+                            name: targetBinary.binary.package.name
+                        })
+                    } else {
+                        resolve(null)
+                    }
+                } else {
+                    resolve(null)
+                }
+            })
+        })
+    }
+
+    static _latestCorretto(major) {
+
+        let sanitizedOS, ext
+
+        switch(process.platform) {
+            case 'win32':
+                sanitizedOS = 'windows'
+                ext = 'zip'
+                break
+            case 'darwin':
+                sanitizedOS = 'macos'
+                ext = 'tar.gz'
+                break
+            case 'linux':
+                sanitizedOS = 'linux'
+                ext = 'tar.gz'
+                break
+            default:
+                sanitizedOS = process.platform
+                ext = 'tar.gz'
+                break
+        }
+
+        const url = `https://corretto.aws/downloads/latest/amazon-corretto-${major}-x64-${sanitizedOS}-jdk.${ext}`
+
+        return new Promise((resolve, reject) => {
+            request.head({url, json: true}, (err, resp) => {
+                if(!err && resp.statusCode === 200){
                     resolve({
-                        uri: body[0].binary_link,
-                        size: body[0].binary_size,
-                        name: body[0].binary_name
+                        uri: url,
+                        size: parseInt(resp.headers['content-length']),
+                        name: url.substr(url.lastIndexOf('/')+1)
                     })
                 } else {
                     resolve(null)
                 }
             })
         })
+
     }
 
     /**
@@ -455,6 +479,11 @@ class JavaGuard extends EventEmitter {
                         } */
                     }
                 }
+                // Space included so we get only the vendor.
+            } else if(props[i].lastIndexOf('java.vendor ') > -1) {
+                let vendorName = props[i].split('=')[1].trim()
+                console.log(props[i].trim())
+                meta.vendor = vendorName
             }
         }
 
@@ -649,51 +678,26 @@ class JavaGuard extends EventEmitter {
      * @returns {Promise.<Set.<string>>} A promise which resolves to a set of the discovered
      * root JVM folders.
      */
-    static _scanFileSystem(scanDir){
-        return new Promise((resolve, reject) => {
+    static async _scanFileSystem(scanDir){
 
-            fs.exists(scanDir, (e) => {
+        let res = new Set()
 
-                let res = new Set()
-                
-                if(e){
-                    fs.readdir(scanDir, (err, files) => {
-                        if(err){
-                            resolve(res)
-                            console.log(err)
-                        } else {
-                            let pathsDone = 0
+        if(await fs.pathExists(scanDir)) {
 
-                            for(let i=0; i<files.length; i++){
+            const files = await fs.readdir(scanDir)
+            for(let i=0; i<files.length; i++){
 
-                                const combinedPath = path.join(scanDir, files[i])
-                                const execPath = JavaGuard.javaExecFromRoot(combinedPath)
+                const combinedPath = path.join(scanDir, files[i])
+                const execPath = JavaGuard.javaExecFromRoot(combinedPath)
 
-                                fs.exists(execPath, (v) => {
-
-                                    if(v){
-                                        res.add(combinedPath)
-                                    }
-
-                                    ++pathsDone
-
-                                    if(pathsDone === files.length){
-                                        resolve(res)
-                                    }
-
-                                })
-                            }
-                            if(pathsDone === files.length){
-                                resolve(res)
-                            }
-                        }
-                    })
-                } else {
-                    resolve(res)
+                if(await fs.pathExists(execPath)) {
+                    res.add(combinedPath)
                 }
-            })
+            }
+        }
 
-        })
+        return res
+
     }
 
     /**
@@ -799,9 +803,14 @@ class JavaGuard extends EventEmitter {
 
         // Get possible paths from the registry.
         let pathSet1 = await JavaGuard._scanRegistry()
-        if(pathSet1.length === 0){
+        if(pathSet1.size === 0){
             // Do a manual file system scan of program files.
-            pathSet1 = JavaGuard._scanFileSystem('C:\\Program Files\\Java')
+            pathSet1 = new Set([
+                ...pathSet1,
+                ...(await JavaGuard._scanFileSystem('C:\\Program Files\\Java')),
+                ...(await JavaGuard._scanFileSystem('C:\\Program Files\\Eclipse Foundation')),
+                ...(await JavaGuard._scanFileSystem('C:\\Program Files\\AdoptOpenJDK'))
+            ])
         }
 
         // Get possible paths from the data directory.
@@ -1292,7 +1301,7 @@ class AssetGuard extends EventEmitter {
         return new Promise((resolve, reject) => {
 
             //Asset constants
-            const resourceURL = 'http://resources.download.minecraft.net/'
+            const resourceURL = 'https://resources.download.minecraft.net/'
             const localPath = path.join(self.commonPath, 'assets')
             const objectPath = path.join(localPath, 'objects')
 
@@ -1544,21 +1553,7 @@ class AssetGuard extends EventEmitter {
                     this.java = new DLTracker([jre], jre.size, (a, self) => {
                         if(verData.name.endsWith('zip')){
 
-                            const zip = new AdmZip(a.to)
-                            const pos = path.join(dataDir, zip.getEntries()[0].entryName)
-                            zip.extractAllToAsync(dataDir, true, (err) => {
-                                if(err){
-                                    console.log(err)
-                                    self.emit('complete', 'java', JavaGuard.javaExecFromRoot(pos))
-                                } else {
-                                    fs.unlink(a.to, err => {
-                                        if(err){
-                                            console.log(err)
-                                        }
-                                        self.emit('complete', 'java', JavaGuard.javaExecFromRoot(pos))
-                                    })
-                                }
-                            })
+                            this._extractJdkZip(a.to, dataDir, self)
 
                         } else {
                             // Tar.gz
@@ -1599,67 +1594,31 @@ class AssetGuard extends EventEmitter {
 
     }
 
-    // _enqueueOracleJRE(dataDir){
-    //     return new Promise((resolve, reject) => {
-    //         JavaGuard._latestJREOracle().then(verData => {
-    //             if(verData != null){
+    async _extractJdkZip(zipPath, runtimeDir, self) {
+                            
+        const zip = new StreamZip.async({
+            file: zipPath,
+            storeEntries: true
+        })
 
-    //                 const combined = verData.uri + PLATFORM_MAP[process.platform]
-        
-    //                 const opts = {
-    //                     url: combined,
-    //                     headers: {
-    //                         'Cookie': 'oraclelicense=accept-securebackup-cookie'
-    //                     }
-    //                 }
-        
-    //                 request.head(opts, (err, resp, body) => {
-    //                     if(err){
-    //                         resolve(false)
-    //                     } else {
-    //                         dataDir = path.join(dataDir, 'runtime', 'x64')
-    //                         const name = combined.substring(combined.lastIndexOf('/')+1)
-    //                         const fDir = path.join(dataDir, name)
-    //                         const jre = new Asset(name, null, parseInt(resp.headers['content-length']), opts, fDir)
-    //                         this.java = new DLTracker([jre], jre.size, (a, self) => {
-    //                             let h = null
-    //                             fs.createReadStream(a.to)
-    //                                 .on('error', err => console.log(err))
-    //                                 .pipe(zlib.createGunzip())
-    //                                 .on('error', err => console.log(err))
-    //                                 .pipe(tar.extract(dataDir, {
-    //                                     map: (header) => {
-    //                                         if(h == null){
-    //                                             h = header.name
-    //                                         }
-    //                                     }
-    //                                 }))
-    //                                 .on('error', err => console.log(err))
-    //                                 .on('finish', () => {
-    //                                     fs.unlink(a.to, err => {
-    //                                         if(err){
-    //                                             console.log(err)
-    //                                         }
-    //                                         if(h.indexOf('/') > -1){
-    //                                             h = h.substring(0, h.indexOf('/'))
-    //                                         }
-    //                                         const pos = path.join(dataDir, h)
-    //                                         self.emit('complete', 'java', JavaGuard.javaExecFromRoot(pos))
-    //                                     })
-    //                                 })
-                                
-    //                         })
-    //                         resolve(true)
-    //                     }
-    //                 })
+        let pos = ''
+        try {
+            const entries = await zip.entries()
+            pos = path.join(runtimeDir, Object.keys(entries)[0])
 
-    //             } else {
-    //                 resolve(false)
-    //             }
-    //         })
-    //     })
+            console.log('Extracting jdk..')
+            await zip.extract(null, runtimeDir)
+            console.log('Cleaning up..')
+            await fs.remove(zipPath)
+            console.log('Jdk extraction complete.')
 
-    // }
+        } catch(err) {
+            console.log(err)
+        } finally {
+            zip.close()
+            self.emit('complete', 'java', JavaGuard.javaExecFromRoot(pos))
+        }
+    }
 
     // _enqueueMojangJRE(dir){
     //     return new Promise((resolve, reject) => {
